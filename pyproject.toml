@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transfer-docker-image"
+version = "0.1.0"
+description = "Build Docker images for a saved target and transfer them over SSH"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+transfer-docker-image = "transfer_docker_image.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

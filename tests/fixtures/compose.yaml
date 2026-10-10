@@ -1,0 +1,11 @@
+services:
+  api:
+    image: transfer-docker-image-test-api:v1
+    build:
+      context: .
+      args:
+        VERSION: compose
+  worker:
+    build: .
+  prebuilt:
+    image: postgres:17
