@@ -89,31 +89,44 @@ def configure_target(args, existing, config, runner):
     merge_flags(value, args, ("ssh_host", "ssh_user", "ssh_port", "identity_file", "host_os", "remote_shell", "platform"))
     interactive = not args.non_interactive and not any(getattr(args, field) is not None for field in
                       ("ssh_host", "ssh_user", "ssh_port", "identity_file", "host_os", "remote_shell", "platform"))
+    aliases = discover_aliases() if interactive or not value.get("ssh_host") else []
+    named_alias = args.action == "add" and not value.get("ssh_host") and args.name in aliases
+    if named_alias:
+        value["ssh_host"] = args.name
+    if named_alias and not interactive:
+        print(f"Using existing SSH alias {args.name}; authentication comes from your SSH config and agent.")
     if interactive:
-        aliases = discover_aliases()
-        if aliases:
+        if aliases and not named_alias:
             print("SSH aliases: " + ", ".join(aliases))
-        value["ssh_host"] = prompt("SSH alias or hostname", value.get("ssh_host"), required=True)
-        for field, label in (("ssh_user", "SSH username (blank uses SSH config; '-' clears)"),
-                             ("ssh_port", "SSH port (blank uses SSH config; '-' clears)")):
-            entered = prompt(label, value.get(field))
-            if entered:
-                try:
-                    value[field] = int(entered) if field == "ssh_port" else entered
-                except ValueError:
-                    raise UserError("SSH port must be an integer.") from None
-            else:
-                value.pop(field, None)
-        keys = discover_keys()
-        for index, key in enumerate(keys, 1):
-            print(f"  {index}. {key}")
-        entered = prompt("SSH key path or number (blank uses agent/defaults; '-' clears)", value.get("identity_file"))
-        if entered:
-            if str(entered).isdigit() and 1 <= int(entered) <= len(keys):
-                entered = str(keys[int(entered) - 1])
-            value["identity_file"] = entered
+        if not named_alias:
+            previous_host = value.get("ssh_host")
+            value["ssh_host"] = prompt("SSH alias or hostname", previous_host, required=True)
+            if previous_host != value["ssh_host"]:
+                for field in ("ssh_user", "ssh_port", "identity_file"):
+                    value.pop(field, None)
+        if value["ssh_host"] in aliases and not any(value.get(field) for field in ("ssh_user", "ssh_port", "identity_file")):
+            print(f"Using existing SSH alias {value['ssh_host']}; authentication comes from your SSH config and agent.")
         else:
-            value.pop("identity_file", None)
+            for field, label in (("ssh_user", "SSH username (blank uses SSH config; '-' clears)"),
+                                 ("ssh_port", "SSH port (blank uses SSH config; '-' clears)")):
+                entered = prompt(label, value.get(field))
+                if entered:
+                    try:
+                        value[field] = int(entered) if field == "ssh_port" else entered
+                    except ValueError:
+                        raise UserError("SSH port must be an integer.") from None
+                else:
+                    value.pop(field, None)
+            keys = discover_keys()
+            for index, key in enumerate(keys, 1):
+                print(f"  {index}. {key}")
+            entered = prompt("SSH key path or number (blank uses agent/defaults; '-' clears)", value.get("identity_file"))
+            if entered:
+                if str(entered).isdigit() and 1 <= int(entered) <= len(keys):
+                    entered = str(keys[int(entered) - 1])
+                value["identity_file"] = entered
+            else:
+                value.pop("identity_file", None)
         # Re-detect on an interactive edit; don't preserve stale host/platform values.
         for field in ("host_os", "remote_shell", "platform", "engine_os_version"):
             value.pop(field, None)

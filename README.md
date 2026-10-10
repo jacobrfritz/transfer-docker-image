@@ -21,6 +21,18 @@ access, and saves the destination platform. Workflow setup asks for a local
 directory or Git URL, a Dockerfile or Compose configuration, and a saved target.
 Use `--help` on any command for scriptable setup options.
 
+When the target name matches an existing SSH alias, setup automatically reuses
+that alias without asking you to re-enter its hostname, username, port, or key:
+
+```text
+transfer-docker-image target add website_vps
+```
+
+Selecting an existing alias during interactive setup also reuses its SSH
+configuration and agent authentication. No new key is needed. SSH can still ask
+for the server password or a key passphrase if your existing authentication
+requires it; unlocked agent keys or configured connection sharing are reused.
+
 For example, configure an existing SSH alias and a local Compose project without
 interactive setup:
 
@@ -258,9 +270,12 @@ repository authentication uses the user's existing Git credentials or SSH setup.
 Interactive target setup must:
 
 1. Let the user choose an existing SSH config alias or enter a hostname and
-   username, with an optional port.
-2. Offer SSH agent/default authentication or selection of an existing private
-   key. Discover candidate keys in the user's SSH directory without reading or
+   username, with an optional port. Automatically reuse an alias matching the
+   new target's name, including in non-interactive setup.
+2. For existing aliases, inherit authentication and connection details without
+   redundant prompts. For new hostnames or edits to explicit overrides, offer
+   SSH agent/default authentication or selection of an existing private key.
+   Discover candidate keys in the user's SSH directory without reading or
    copying private-key contents.
 3. Test the connection using the selected settings.
 4. Check that remote Docker is available and accessible to the SSH user.
@@ -273,6 +288,11 @@ SSH aliases must retain settings such as their configured user, identity,
 port, and proxy connection. Explicit target settings override corresponding SSH
 config defaults. Key discovery is a convenience; a connection test determines
 whether authentication succeeds.
+
+For automation, SSH and SCP override `RemoteCommand` with `none` and
+`RequestTTY` with `no`. This lets aliases that normally start tmux or an
+interactive shell execute the tool's Docker commands. Connection and
+authentication settings, including configured connection sharing, are inherited.
 
 Users must be able to list, test, edit, and remove saved targets. Removing a
 target referenced by a workflow must produce an actionable error.

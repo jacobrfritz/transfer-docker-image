@@ -1,6 +1,7 @@
 import base64
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -68,7 +69,44 @@ class RemoteTests(unittest.TestCase):
         self.assertIn("User=jake", args)
         self.assertIn("Port=2222", args)
         self.assertIn(str(identity.resolve()), args)
+        self.assertIn("RemoteCommand=none", args)
+        self.assertIn("RequestTTY=no", args)
         self.assertEqual(args[-1], "[2001:db8::1]:C:/Users/Jake Smith/image.tar")
+
+    @unittest.skipUnless(shutil.which("ssh"), "OpenSSH is required for configuration regression test")
+    def test_interactive_alias_options_are_overridden_but_connection_settings_are_preserved(self):
+        ssh_config = Path(self.temporary.name) / "ssh-config"
+        ssh_config.write_text(
+            "Host configured\n"
+            "  HostName example.invalid\n"
+            "  User existing-user\n"
+            "  Port 2222\n"
+            "  IdentityFile ~/.ssh/existing-key\n"
+            "  ProxyJump bastion\n"
+            "  RemoteCommand tmux new-session -A -s main\n"
+            "  RequestTTY force\n"
+            "  ControlMaster auto\n"
+            "  ControlPersist 60\n",
+            encoding="utf-8",
+        )
+        remote = Remote({"ssh_host": "configured"}, self.runner, self.config)
+        remote.raw("uname -s")
+        args = self.runner.run.call_args.args[0]
+        # -G resolves configuration without connecting or reading private keys.
+        resolved = subprocess.run([args[0], "-F", str(ssh_config), "-G", *args[1:]],
+                                  capture_output=True, text=True, timeout=15)
+        self.assertEqual(resolved.returncode, 0, resolved.stderr)
+        settings = dict(line.split(" ", 1) for line in resolved.stdout.splitlines() if " " in line)
+        # OpenSSH omits RemoteCommand from -G output when it is disabled.
+        self.assertEqual(settings.get("remotecommand", "none"), "none")
+        self.assertEqual(settings["requesttty"], "false")
+        self.assertEqual(settings["hostname"], "example.invalid")
+        self.assertEqual(settings["user"], "existing-user")
+        self.assertEqual(settings["port"], "2222")
+        self.assertEqual(settings["identityfile"], "~/.ssh/existing-key")
+        self.assertEqual(settings["proxyjump"], "bastion")
+        self.assertEqual(settings["controlmaster"], "auto")
+        self.assertEqual(settings["controlpersist"], "60")
 
     def test_invalid_host_cannot_be_an_ssh_option(self):
         with self.assertRaises(UserError):

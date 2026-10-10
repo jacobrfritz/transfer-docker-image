@@ -101,7 +101,9 @@ class Remote:
                 raise UserError(f"SSH identity file does not exist: {identity}")
 
     def options(self):
-        options = ["-o", "ConnectTimeout=15"]
+        # Aliases may launch tmux/a shell via RemoteCommand or force a TTY.
+        # SSH/SCP must instead execute the workflow's commands without a terminal.
+        options = ["-o", "ConnectTimeout=15", "-o", "RemoteCommand=none", "-o", "RequestTTY=no"]
         for key, option in (("ssh_user", "User"), ("ssh_port", "Port")):
             if self.target.get(key) is not None:
                 options += ["-o", f"{option}={self.target[key]}"]

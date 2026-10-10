@@ -84,6 +84,38 @@ class CliTests(unittest.TestCase):
         self.assertIn("Authentication failed", error)
         self.assertNotIn("bad", Config(self.path).data["targets"])
 
+    def test_matching_ssh_alias_reuses_settings_without_setup_prompts(self):
+        for flags in ([], ["--non-interactive"]):
+            with self.subTest(flags=flags), \
+                 patch("transfer_docker_image.cli.discover_aliases", return_value=["website_vps"]), \
+                 patch("transfer_docker_image.cli.discover_keys", side_effect=AssertionError("must reuse SSH config")), \
+                 patch("builtins.input", side_effect=AssertionError("must not prompt")), \
+                 patch("transfer_docker_image.cli.Remote") as remote:
+                remote.return_value.probe.return_value = {
+                    "ssh_host": "website_vps", "host_os": "linux", "remote_shell": "posix", "platform": "linux/amd64"}
+                status, output, error = self.invoke("target", "add", "website_vps", *flags)
+                self.assertEqual(status, 0, error)
+                self.assertIn("Using existing SSH alias website_vps", output)
+                self.assertEqual(remote.call_args.args[0], {"ssh_host": "website_vps"})
+                saved = Config(self.path).get("targets", "website_vps")
+                self.assertNotIn("identity_file", saved)
+                self.assertNotIn("ssh_user", saved)
+                self.assertNotIn("ssh_port", saved)
+            self.invoke("target", "remove", "website_vps")
+
+    def test_selecting_alias_only_asks_for_the_alias(self):
+        with patch("transfer_docker_image.cli.discover_aliases", return_value=["website_vps"]), \
+             patch("transfer_docker_image.cli.discover_keys", side_effect=AssertionError("must reuse SSH config")), \
+             patch("sys.stdin.isatty", return_value=True), \
+             patch("builtins.input", side_effect=["website_vps"]) as input_mock, \
+             patch("transfer_docker_image.cli.Remote") as remote:
+            remote.return_value.probe.return_value = {
+                "ssh_host": "website_vps", "host_os": "linux", "remote_shell": "posix", "platform": "linux/amd64"}
+            status, _, error = self.invoke("target", "add", "website")
+            self.assertEqual(status, 0, error)
+            input_mock.assert_called_once()
+            self.assertEqual(remote.call_args.args[0], {"ssh_host": "website_vps"})
+
     def test_missing_flags_do_not_prompt_in_noninteractive_mode(self):
         with patch("builtins.input", side_effect=AssertionError("must not prompt")):
             status, _, error = self.invoke("workflow", "add", "app", "--non-interactive")
