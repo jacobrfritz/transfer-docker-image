@@ -160,10 +160,6 @@ def compose_plan(name, workflow, source, workspace, platform, runner):
         if ":" not in image.rsplit("/", 1)[-1] and "@" not in image:
             image += ":latest"
         definition["image"] = validate_image(image)
-    tags = [services[service]["image"] for service in selected]
-    if len(tags) != len(set(tags)):
-        raise UserError("Selected Compose services share an image tag. Assign unique tags before transferring them.")
-
     # JSON is valid YAML. A .yaml suffix makes Bake treat this as Compose, not Bake JSON.
     resolved_file = workspace / "resolved-compose.yaml"
     resolved_file.write_text(json.dumps(resolved), encoding="utf-8")
@@ -174,9 +170,9 @@ def compose_plan(name, workflow, source, workspace, platform, runner):
     if len(set(target_names.values())) != len(target_names):
         raise UserError("Compose service names collide after Buildx replaces dots with underscores. Rename the conflicting services.")
     selected_targets = [target_names[service] for service in selected]
-    targets = {}
-    outputs = []
-    for index, service in enumerate(selected):
+    service_targets = {}
+    image_services = {}
+    for service in selected:
         target_name = target_names[service]
         if target_name not in all_targets:
             raise UserError(f"Buildx did not resolve service {service!r} as a build target.")
@@ -187,13 +183,43 @@ def compose_plan(name, workflow, source, workspace, platform, runner):
         target["platforms"] = [platform]
         target["tags"] = [services[service]["image"]]
         target["args"] = {**target.get("args", {}), **workflow.get("build_args", {})}
+        service_targets[service] = target
+        image_services.setdefault(services[service]["image"], []).append(service)
+
+    # Dependencies may reference a service whose shared-image build is removed.
+    # Redirect those references to the retained representative before comparing.
+    representatives = {
+        target_names[service]: target_names[group[0]]
+        for group in image_services.values() for service in group
+    }
+    for target in service_targets.values():
+        if "contexts" in target:
+            target["contexts"] = {
+                key: "target:" + representatives[value[7:]]
+                if isinstance(value, str) and value.startswith("target:") else value
+                for key, value in target["contexts"].items()
+            }
+
+    targets = {}
+    outputs = []
+    for index, (image, group) in enumerate(image_services.items()):
+        representative = group[0]
+        target = service_targets[representative]
+        settings = {key: value for key, value in target.items() if key not in ("tags", "output")}
+        for service in group[1:]:
+            other = {key: value for key, value in service_targets[service].items() if key not in ("tags", "output")}
+            if settings != other:
+                raise UserError(f"Services {representative!r} and {service!r} share image tag {image!r}, "
+                                "but their build settings differ. Assign unique image tags or align their build settings.")
+        if len(group) > 1:
+            print(f"Shared image {image}: {', '.join(group)} (build and transfer once)", flush=True)
         archive = workspace / f"image-{index}.tar"
         target["output"] = [docker_output(archive)]
-        targets[target_name] = target
-        outputs.append((archive, target["tags"][0]))
+        targets[target_names[representative]] = target
+        outputs.append((archive, image))
     plan_file = workspace / "build.json"
     plan_file.write_text(json.dumps({"target": targets}), encoding="utf-8")
-    return plan_file, selected_targets, outputs
+    return plan_file, list(targets), outputs
 
 
 def build_images(name, workflow, source, workspace, platform, runner, builder=None):

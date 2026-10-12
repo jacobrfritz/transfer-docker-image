@@ -1,0 +1,27 @@
+services:
+  migrate:
+    image: transfer-docker-image-test-shared:v1
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: [migrate]
+    restart: "no"
+  app:
+    image: transfer-docker-image-test-shared:v1
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: [serve]
+    environment:
+      ROLE: api
+    depends_on:
+      - migrate
+  worker:
+    image: transfer-docker-image-test-child:v1
+    build:
+      context: .
+      dockerfile: Dockerfile.dependent
+      additional_contexts:
+        base: service:app
+  db:
+    image: postgres:17

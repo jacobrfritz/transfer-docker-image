@@ -65,6 +65,61 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(selected, ["worker"])
         self.assertEqual(list(json.loads(plan.read_text())["target"]), ["worker"])
 
+    def shared_image(self):
+        self.resolved["services"]["worker"].update(image="api:dev", command=["run-worker"],
+                                                   environment={"MODE": "worker"})
+        self.bake["target"]["worker"] = {**self.bake["target"]["api"], "tags": ["api:dev"]}
+
+    def test_shared_image_with_identical_builds_is_exported_once(self):
+        self.shared_image()
+        self.runner.json.side_effect = [self.resolved, self.bake]
+        with redirect_stdout(io.StringIO()) as stdout:
+            plan, selected, outputs = compose_plan("app", self.workflow, self.root, self.root, "linux/amd64", self.runner)
+        self.assertEqual(selected, ["api"])
+        self.assertEqual(list(json.loads(plan.read_text())["target"]), ["api"])
+        self.assertEqual([image for _, image in outputs], ["api:dev"])
+        self.assertIn("Shared image api:dev: api, worker", stdout.getvalue())
+
+    def test_shared_tag_with_different_builds_reports_services_and_tag(self):
+        for setting, value in (("dockerfile", "Dockerfile.worker"), ("target", "worker"),
+                               ("args", {"BASE": "different"}), ("labels", {"keep": "different"})):
+            with self.subTest(setting=setting):
+                self.shared_image()
+                self.bake["target"]["worker"][setting] = value
+                self.runner.json.side_effect = [self.resolved, self.bake]
+                with self.assertRaisesRegex(UserError, "'api' and 'worker' share image tag 'api:dev'.*build settings differ"):
+                    compose_plan("app", self.workflow, self.root, self.root, "linux/amd64", self.runner)
+
+    def test_workflow_overrides_are_applied_before_comparing_shared_builds(self):
+        self.shared_image()
+        self.bake["target"]["api"]["args"] = {"BASE": "1", "VERSION": "api"}
+        self.bake["target"]["worker"]["args"] = {"BASE": "1", "VERSION": "worker"}
+        self.runner.json.side_effect = [self.resolved, self.bake]
+        with redirect_stdout(io.StringIO()):
+            plan, _, outputs = compose_plan("app", self.workflow, self.root, self.root, "linux/amd64", self.runner)
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(json.loads(plan.read_text())["target"]["api"]["args"]["VERSION"], "2")
+
+    def test_dependencies_on_deduplicated_services_are_redirected(self):
+        self.shared_image()
+        self.resolved["services"]["child"] = {"build": {"context": str(self.root)}, "image": "child:v1"}
+        self.bake["target"]["child"] = {"context": str(self.root), "contexts": {"base": "target:worker"}}
+        self.runner.json.side_effect = [self.resolved, self.bake]
+        with redirect_stdout(io.StringIO()):
+            plan, selected, outputs = compose_plan("app", self.workflow, self.root, self.root, "linux/amd64", self.runner)
+        self.assertEqual(selected, ["api", "child"])
+        self.assertEqual([image for _, image in outputs], ["api:dev", "child:v1"])
+        self.assertEqual(json.loads(plan.read_text())["target"]["child"]["contexts"], {"base": "target:api"})
+
+    def test_explicitly_selecting_one_shared_service_keeps_that_service(self):
+        self.shared_image()
+        self.workflow["services"] = ["worker"]
+        self.runner.json.side_effect = [self.resolved, self.bake]
+        plan, selected, outputs = compose_plan("app", self.workflow, self.root, self.root, "linux/amd64", self.runner)
+        self.assertEqual(selected, ["worker"])
+        self.assertEqual(list(json.loads(plan.read_text())["target"]), ["worker"])
+        self.assertEqual([image for _, image in outputs], ["api:dev"])
+
     def test_prebuilt_selected_service_is_rejected(self):
         self.runner.json.return_value = self.resolved
         self.workflow["services"] = ["db"]

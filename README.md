@@ -323,6 +323,14 @@ the destination's SSH server and filesystem, including paths containing spaces.
   Conflicting Compose platform settings must produce an actionable error.
 - Preserve explicit image names and tags. For services without `image:`, assign
   a stable name such as `<workflow>-<service>:latest` and report that name.
+- When selected services share an image tag and have identical effective build
+  settings, build, export, transfer, and load that image once. Runtime settings
+  such as commands, environment variables, and volumes do not affect this check.
+  Compare the resolved Buildx settings after applying the destination platform
+  and workflow build arguments. If the builds differ, report the services and
+  shared tag and require unique tags or matching build settings.
+- Preserve build dependencies when deduplicating shared images by redirecting
+  service build-context references to the retained build target.
 - Export only the selected build outputs. Do not include unrelated local images
   or prebuilt service images.
 - Do not start services or build non-selected services implicitly. If selected
@@ -430,6 +438,9 @@ require authentication or host-key confirmation.
   tag, or commit can each be built and transferred.
 - A Compose project containing both buildable and prebuilt services transfers
   only the selected buildable services' images.
+- Compose services such as an application and migration runner can share an
+  image tag with identical builds; the workflow produces one archive for that
+  tag. Conflicting builds sharing a tag fail before building or transferring.
 - SSH aliases, SSH agent authentication, and explicit identity-file connections
   can each be saved and tested.
 - A saved workflow can be rerun without re-entering its source, target, or build

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from transfer_docker_image.build import build_images, check_builder, inspect_archive
+from transfer_docker_image.build import build_images, check_builder, compose_plan, inspect_archive
 from transfer_docker_image.process import Runner
 
 
@@ -39,3 +39,20 @@ class DockerIntegrationTests(unittest.TestCase):
             outputs = build_images("test-workflow", workflow, source, Path(temporary), platform, runner)
             self.assertEqual([image for _, image in outputs], ["test-workflow-api.jobs:latest"])
             self.assertTrue(inspect_archive(outputs[0][0], outputs[0][1], platform).startswith("sha256:"))
+
+    def test_shared_image_exported_once_and_build_dependency_preserved(self):
+        runner = Runner()
+        source = Path(__file__).parent / "fixtures"
+        platform = os.environ.get("TRANSFER_DOCKER_TEST_PLATFORM", "linux/amd64")
+        workflow = {"build_type": "compose", "compose_file": "shared-compose.yaml",
+                    "services": ["migrate", "app", "worker"]}
+        with tempfile.TemporaryDirectory(prefix="transfer-integration-") as temporary:
+            workspace = Path(temporary)
+            _, selected, planned = compose_plan("test-shared", workflow, source, workspace, platform, runner)
+            self.assertEqual(selected, ["migrate", "worker"])
+            self.assertEqual(len(planned), 2)
+            outputs = build_images("test-shared", workflow, source, workspace, platform, runner)
+            self.assertEqual([image for _, image in outputs],
+                             ["transfer-docker-image-test-shared:v1", "transfer-docker-image-test-child:v1"])
+            for archive, image in outputs:
+                self.assertTrue(inspect_archive(archive, image, platform).startswith("sha256:"))

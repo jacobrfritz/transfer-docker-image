@@ -1,0 +1,2 @@
+FROM base
+LABEL test.dependent=true
