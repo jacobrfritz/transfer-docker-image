@@ -1,10 +1,12 @@
 from contextlib import redirect_stderr, redirect_stdout
+import base64
 import io
 from pathlib import Path
+import subprocess
 import tempfile
 import tomllib
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from transfer_docker_image.cli import main
 from transfer_docker_image.config import Config, dumps
@@ -129,3 +131,50 @@ class CliTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("already exists", error)
         self.assertEqual(Config(self.path).data["workflows"]["app"], {"source": "existing"})
+
+
+class KeyCommandsTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "config.toml"
+        Config(self.path).save()
+        self.key = Path(self.temporary.name) / "id_ed25519"
+        self.key.write_text("private", encoding="utf-8")
+        Path(str(self.key) + ".pub").write_text("ssh-ed25519 AAAATESTKEY jake@local\n", encoding="utf-8")
+
+    def invoke(self, *args):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = main(["--config", str(self.path), *args])
+        return result, stdout.getvalue(), stderr.getvalue()
+
+    def test_generate_refuses_existing_key(self):
+        status, _, error = self.invoke("key", "generate", str(self.key))
+        self.assertEqual(status, 1)
+        self.assertIn("already exists", error)
+        self.assertEqual(self.key.read_text(encoding="utf-8"), "private")
+
+    def test_install_appends_the_public_key_with_posix_quoting(self):
+        runner = Mock()
+        runner.run.return_value = subprocess.CompletedProcess([], 0, stdout="Linux\n", stderr="")
+        with patch("transfer_docker_image.cli.Runner", return_value=runner):
+            status, output, error = self.invoke("key", "install", "--host", "server", "--key", str(self.key))
+        self.assertEqual(status, 0, error)
+        self.assertIn("Installed", output)
+        remote_command = runner.run.call_args.args[0][-1]
+        self.assertIn("grep -qxF", remote_command)
+        self.assertIn("AAAATESTKEY", remote_command)
+        self.assertIn("authorized_keys", remote_command)
+
+    def test_install_uses_powershell_for_windows_targets(self):
+        runner = Mock()
+        runner.run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with patch("transfer_docker_image.cli.Runner", return_value=runner):
+            status, _, error = self.invoke("key", "install", "--host", "windows", "--key", str(self.key),
+                                           "--shell", "powershell")
+        self.assertEqual(status, 0, error)
+        encoded = runner.run.call_args.args[0][-1].split()[-1]
+        script = base64.b64decode(encoded).decode("utf-16-le")
+        self.assertIn("Add-Content", script)
+        self.assertIn("AAAATESTKEY", script)

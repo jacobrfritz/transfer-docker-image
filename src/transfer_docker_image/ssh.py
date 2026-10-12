@@ -81,6 +81,11 @@ def discover_keys(directory=None):
     return sorted(keys)
 
 
+def key_paths(path):
+    private = Path(path).expanduser()
+    return private, Path(str(private) + ".pub")
+
+
 class Remote:
     def __init__(self, target, runner, config):
         self.target = target.copy()

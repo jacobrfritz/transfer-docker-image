@@ -75,6 +75,43 @@ is a global option placed before the command. CLI `--source` paths are resolved
 from your current directory; relative sources written directly in TOML are
 resolved from the config file's directory.
 
+## Desktop interface
+
+Open a window for managing targets and workflows and running transfers:
+
+```text
+transfer-docker-image ui
+```
+
+The app has Targets, Workflows, and Run tabs plus a shared output pane. Every
+action runs through the same commands documented above, so validation, probing,
+and transfers behave identically. SSH prompts for a server password or host-key
+confirmation appear in the terminal that launched the app; keep it open during
+setup.
+
+Tkinter ships with python.org Python on Windows and macOS. Linux needs a Tk
+package (`sudo apt install python3-tk` or `sudo dnf install python3-tkinter`).
+Homebrew Python needs the matching `python-tk@X.Y` formula, for example
+`brew install python-tk@3.14`. The `ui` command explains what to install when
+Tkinter is missing.
+
+### Passwordless SSH keys
+
+Target setup already reuses existing SSH aliases, agent keys, and key files.
+To create a new key and install it on a server:
+
+```text
+transfer-docker-image key generate ~/.ssh/id_ed25519
+transfer-docker-image key install --host my-server --key ~/.ssh/id_ed25519
+transfer-docker-image target add my-server --host my-server --identity ~/.ssh/id_ed25519 --non-interactive
+```
+
+The install step asks for the server password or host-key confirmation once in
+the terminal. Existing keys are appended to `authorized_keys` only when absent,
+with POSIX and Windows OpenSSH destinations both supported. Configuration stores
+only the key path, never passwords or private-key contents. The `ui` Targets tab
+offers generate, install, and agent steps as buttons.
+
 ## Specification
 
 A command-line utility that builds Docker images on Windows, macOS, or Linux and

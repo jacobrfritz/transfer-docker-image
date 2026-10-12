@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import shlex
 import sys
 
 from . import __version__
@@ -11,7 +12,7 @@ from .config import Config, check_name, dumps
 from .errors import UserError
 from .pipeline import run_workflow
 from .process import Runner
-from .ssh import Remote, discover_aliases, discover_keys
+from .ssh import Remote, discover_aliases, discover_keys, key_paths, powershell, ps_quote
 
 
 def prompt(label, default=None, *, required=False):
@@ -67,6 +68,18 @@ def parser():
     run = commands.add_parser("run", help="Build, transfer, and load a saved workflow")
     run.add_argument("name")
     run.add_argument("--builder", help="Override the workflow's Buildx builder")
+    commands.add_parser("ui", help="Open the desktop interface")
+    keys = commands.add_parser("key", help="Generate and install SSH keys for passwordless target login")
+    key_actions = keys.add_subparsers(dest="action", required=True)
+    generate = key_actions.add_parser("generate")
+    generate.add_argument("path")
+    generate.add_argument("--comment")
+    install = key_actions.add_parser("install")
+    install.add_argument("--host", dest="ssh_host", required=True, help="SSH config alias, hostname, or IP address")
+    install.add_argument("--user", dest="ssh_user")
+    install.add_argument("--port", dest="ssh_port", type=int)
+    install.add_argument("--key", dest="key_path", required=True, help="Private-key path; the companion .pub key is installed")
+    install.add_argument("--shell", dest="remote_shell", choices=("posix", "powershell", "cmd"))
     commands.add_parser("config-path", help="Print the configuration path")
     return root
 
@@ -228,9 +241,80 @@ def configure_workflow(args, existing, config, runner):
     return value
 
 
+def generate_key(args, runner):
+    runner.require("ssh-keygen")
+    private, public = key_paths(args.path)
+    if private.exists() or public.exists():
+        raise UserError(f"SSH key already exists: {private}. Choose another path.")
+    try:
+        private.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise UserError(f"Cannot create {private.parent}: {exc}") from exc
+    runner.run(["ssh-keygen", "-t", "ed25519", "-f", str(private), "-N", "",
+                "-C", args.comment or "transfer-docker-image"], capture=False)
+    print(f"Created {private} (public key {public}).")
+
+
+def install_key(args, config, runner):
+    runner.require("ssh")
+    private, public = key_paths(args.key_path)
+    if not private.is_file():
+        raise UserError(f"SSH key does not exist: {private}. Generate one with 'key generate PATH'.")
+    if public.is_file():
+        pubkey = public.read_text(encoding="utf-8").strip()
+    else:
+        runner.require("ssh-keygen")
+        pubkey = runner.run(["ssh-keygen", "-y", "-f", str(private)]).stdout.strip()
+    if not pubkey or "\n" in pubkey or " " not in pubkey:
+        raise UserError(f"Cannot read a public key for {private}.")
+    value = {"ssh_host": args.ssh_host}
+    if args.ssh_user:
+        value["ssh_user"] = args.ssh_user
+    if args.ssh_port:
+        value["ssh_port"] = args.ssh_port
+    if args.remote_shell:
+        value["remote_shell"] = args.remote_shell
+    remote = Remote(value, runner, config)
+    if remote.target.get("remote_shell") is None:
+        result = remote.raw("uname -s", check=False)
+        if result.returncode == 0 and result.stdout.strip() in ("Linux", "Darwin"):
+            remote.target["remote_shell"] = "posix"
+        else:
+            fallback = remote.raw(powershell("[Environment]::OSVersion.Platform.ToString()"), check=False)
+            if "Win32NT" not in fallback.stdout:
+                detail = (fallback.stderr or result.stderr or "").strip()
+                raise UserError(f"Cannot connect to {args.ssh_host} or detect its shell. {detail}".strip())
+            remote.target["remote_shell"] = "powershell"
+    posix = (
+        "umask 077 && mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+        " && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+        f" && {{ grep -qxF {shlex.quote(pubkey)} ~/.ssh/authorized_keys"
+        f" || printf '%s\\n' {shlex.quote(pubkey)} >> ~/.ssh/authorized_keys; }}"
+    )
+    windows = (
+        "$dir = Join-Path $env:USERPROFILE '.ssh'; New-Item -ItemType Directory -Force -Path $dir | Out-Null;"
+        " $file = Join-Path $dir 'authorized_keys';"
+        f" if (-not (Select-String -LiteralPath $file -SimpleMatch {ps_quote(pubkey)} -Quiet -ErrorAction SilentlyContinue))"
+        f" {{ Add-Content -LiteralPath $file -Value {ps_quote(pubkey)} }}"
+    )
+    remote.script(posix, windows)
+    print(f"Installed public key for {private} on {args.ssh_host}. "
+          f"Save a target with '--identity {args.key_path}' to reuse it.")
+
+
 def dispatch(args, config, runner):
     if args.command == "config-path":
         print(config.path)
+        return
+    if args.command == "ui":
+        from . import ui
+        ui.start(args.config)
+        return
+    if args.command == "key":
+        if args.action == "generate":
+            generate_key(args, runner)
+        else:
+            install_key(args, config, runner)
         return
     if args.command == "run":
         check_name(args.name)
