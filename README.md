@@ -419,6 +419,18 @@ containers. A failed run must return a nonzero exit code and identify the stage
 that failed. Multiple remote loads are not atomic; if a later load fails, report
 which images were already loaded.
 
+For example, update a running Compose deployment on the destination after a run:
+
+```text
+# in the VPS directory that has docker-compose.prod.yml + .env
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps
+docker compose -f docker-compose.prod.yml logs -f migrate app
+```
+
+`up -d` recreates only the services whose images changed; `ps` and `logs` are
+optional checks.
+
 ## Command-line interface
 
 ```text
